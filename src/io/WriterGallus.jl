@@ -1,0 +1,3 @@
+module WriterGallus
+
+end
