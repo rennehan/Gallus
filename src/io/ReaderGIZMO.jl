@@ -28,8 +28,6 @@ global readable_keys = ["Masses",
 
 set_header(data) = (global header = data)
 import ...FileTypes
-import ...Cells
-import ...CellGeneric, ...CellBlackHole, ...CellDarkMatter, ...CellGas, ...CellStar
 import PhysicalConstants.CODATA2018: k_B, m_p
 using HDF5, StructArrays, Unitful, UnitfulAstro, UnitfulEquivalences, Printf
 using ProgressMeter
@@ -89,7 +87,7 @@ function preallocate_particle_dict(particle_dict::Dict, file_container::FileType
     # Loop through all of the available keys in the first file to determine the size, dim, and 
     # type of the datasets.
     message = "Preallocating internal particle dictionary..."
-    @showprogress 1 message for (i, number_of_particles) in enumerate(header["NumPart_Total"])
+    @showprogress 0.01 message for (i, number_of_particles) in enumerate(header["NumPart_Total"])
         if number_of_particles == 0 continue end
         pt = i - 1
         file_handle = h5open(file_container.file_name)
@@ -290,7 +288,7 @@ function convert_raw_data_to_units(particle_dict::Dict, file_container::FileType
     end
 
     message = "Converting data to Unitful quantities..."
-    @showprogress 1 message for key in keys(particle_dict)
+    @showprogress 0.01 message for key in keys(particle_dict)
         if key == "Header" continue end
         output_dict[key] = Dict()
         convert_and_delete(output_dict[key], particle_dict[key], "ParticleIDs", 1)
@@ -388,13 +386,15 @@ function restructure_particle_dict(particle_dict::Dict)
     end
 
 
-    message = "Copying data to simulation structure..."
-    @showprogress 1 message for key in keys(output_dict)
+    message = "Copying data to Simulation structure..."
+    @showprogress 0.01 message for key in keys(output_dict)
+        # First copy all of the common data from the common keys list
         part_type_key = internal_key_to_part_type(key)
         for property_key in keys(all_key_transform)
             output_dict[key][all_key_transform[property_key]] = particle_dict[part_type_key][property_key]
         end
 
+        # Now copy the unique data to each data set
         if key == "gas"
             key_transform = gas_key_transform
         elseif key == "stars"
@@ -406,7 +406,12 @@ function restructure_particle_dict(particle_dict::Dict)
         end
 
         for property_key in keys(key_transform)
-            output_dict[key][key_transform[property_key]] = particle_dict[part_type_key][property_key]
+            if property_key == "Metallicity"
+                # TODO: Accept all metallicities!
+                output_dict[key][key_transform[property_key]] = particle_dict[part_type_key][property_key][1, :]
+            else
+                output_dict[key][key_transform[property_key]] = particle_dict[part_type_key][property_key]
+            end
         end
     end
 
