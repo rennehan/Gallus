@@ -7,7 +7,8 @@ function convert_units(data_array::Vector, new_unit::Unitful.FreeUnits)
 end
 
 include("io/ReaderMaster.jl")
-include("Halos.jl")
 include("Simulation.jl")
+include("Halos.jl")
+
 
 end

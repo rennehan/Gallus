@@ -1,9 +1,4 @@
-# ReaderGIZMO.jl
-#
-# Requires the following files included beforehand:
-# FileTypes
-# Cells
-using HDF5, Printf, StructArrays, ..FileTypes
+using ..FileTypes
 
 # These don't really need to be super generic 
 # and available across the simulation, so we
@@ -29,7 +24,7 @@ global readable_keys = ["Masses",
 set_header(data) = (global header = data)
 import ...FileTypes
 import PhysicalConstants.CODATA2018: k_B, m_p
-using HDF5, StructArrays, Unitful, UnitfulAstro, UnitfulEquivalences, Printf
+using HDF5, Unitful, UnitfulAstro
 using ProgressMeter
 
 """

@@ -1,9 +1,21 @@
-using DataFrames, CSV, StructArrays
+using DataFrames, CSV
 
 module ReaderRockstar
 import ...FileTypes
 using DataFrames, Unitful, UnitfulAstro
 
+"""
+    ReaderRockstar.read_parameter_file(file_container::FileTypes.Rockstar)
+
+Reads the Rockstar parameter file assuming the standard format. Also 
+necessarily reads the halo ASCII file in order to determine the scale
+factor necessary for converting units.
+
+...
+# Arguments
+- `file_container::FileTypes.Rockstar`: The prepared Rockstar file container.
+...
+"""
 function read_parameter_file(file_container::FileTypes.Rockstar)
     print("ReaderRockstar::read_parameter_file\n")
     parameters = Dict()
@@ -39,6 +51,17 @@ function read_parameter_file(file_container::FileTypes.Rockstar)
     parameters
 end
 
+"""
+    ReaderRockstar.get_halo_dict_from_raw_data(raw_data::DataFrames.DataFrame)
+
+Construct a dictionary of halo data directly from the raw data. This is
+necessary so that we have the same format passed to the Halos module.
+
+...
+# Arguments
+- `raw_data::DataFrames.DataFrame`: The DataFrame of the Rockstar ASCII file.
+...
+"""
 function get_halo_dict_from_raw_data(raw_data::DataFrames.DataFrame)
     print("ReaderRockstar::get_halo_dict_from_raw_data\n")
     number_of_halos = nrow(raw_data)
@@ -102,6 +125,17 @@ function get_halo_dict_from_raw_data(raw_data::DataFrames.DataFrame)
     halo_dict
 end
 
+"""
+    ReaderRockstar.convert_raw_data_to_units(halo_dict::Dict, params::Dict)
+
+Convert the halo dictionary to Unitful units.
+
+...
+# Arguments
+- `halo_dict::Dict`: The dictionary containing all of the halo data.
+- `params::Dict`: The parameter file values.
+...
+"""
 function convert_raw_data_to_units(halo_dict::Dict, params::Dict)    
     print("ReaderRockstar::convert_raw_data_to_units\n")
     output_dict = Dict()
@@ -119,53 +153,55 @@ function convert_raw_data_to_units(halo_dict::Dict, params::Dict)
     output_dict["ids"] = halo_dict["ids"]
     output_dict["coordinates"] = broadcast(.*, halo_dict["coordinates"], length_conv)
     output_dict["velocities"] = broadcast(.*, halo_dict["velocities"], velocity_conv)
-    output_dict["angular_momenta"] = broadcast(.*, halo_dict["angular_momenta"], angular_momentum_conv)
+    output_dict["angular_momenta"] = broadcast(.*, halo_dict["angular_momenta"], 
+                                               angular_momentum_conv)
 
     output_dict["masses"] = Dict()
     mass_keys = ["mvir", "m200", "m500", "m2500"]
     for mass_key in mass_keys
-        output_dict["masses"][mass_key] = broadcast(.*, halo_dict["masses"][mass_key], mass_conv)
+        output_dict["masses"][mass_key] = broadcast(.*, halo_dict["masses"][mass_key], 
+                                                    mass_conv)
     end
     output_dict["radii"] = Dict()
     radius_keys = ["rvir", "r200", "r500", "r2500"]
     for radius_key in radius_keys
-        output_dict["radii"][radius_key] = broadcast(.*, halo_dict["radii"][radius_key], radius_conv)
+        output_dict["radii"][radius_key] = broadcast(.*, halo_dict["radii"][radius_key], 
+                                                     radius_conv)
     end
     output_dict
 end
 
 end
 
-# Rockstar ASCII is pretty simple to read since we can just
-# use a CSV reader package directly into a data frame.
-# All that is left is to convert the raw data into the 
-# default Gallus format for halos.
-#
-# We will return the number of halos found, and 0 galaxies.
-# There are zero galaxies because this function is only
-# called when the data hasn't been post-processed yet.
-# There should be a FileTypes.Gallus file saved somewhere,
-# or else we must recompute it!
-#
-# The conversion from ASCII column to Gallus.Halos.Halo format is:
-# 1  : halo_id
-# 2  : particle_count[1]  (dark matter particle count)
-# 3  : masses['mvir']
-# 5  : radii['rvir']
-# 9  : position[1]
-# 10 : position[2]
-# 11 : position[3]
-# 12 : velocity[1]
-# 13 : velocity[2]
-# 14 : velocity[3]
-# 15 : angular_momentum[1]
-# 16 : angular_momentum[2]
-# 17 : angular_momentum[3]
-# 29 : masses['m200']
-# 30 : masses['m500']
-# 31 : masses['m2500']
+"""
+    read_file(file_container::FileTypes.Rockstar)
 
-# All other fields must be computed, or ignored until implemented.
+Implementation of the read_file(FilesTypes.XYZ) method for the Rockstar
+halo finder.
+
+The conversion from ASCII column to values is:
+1  : halo_id
+2  : dark matter particle count
+3  : masses['mvir']
+5  : radii['rvir']
+9  : coordinates[1]
+10 : coordinates[2]
+11 : coordinates[3]
+12 : velocity[1]
+13 : velocity[2]
+14 : velocity[3]
+15 : angular_momentum[1]
+16 : angular_momentum[2]
+17 : angular_momentum[3]
+29 : masses['m200']
+30 : masses['m500']
+31 : masses['m2500']
+
+...
+# Arguments
+- `file_container::FileTypes.Rockstar`: The prepared Rockstar container (file name/param file)
+...
+"""
 function read_file(file_container::FileTypes.Rockstar)
     raw_data = DataFrame(CSV.File(file_container.file_name, header=1, skipto=20))
     params = ReaderRockstar.read_parameter_file(file_container)
