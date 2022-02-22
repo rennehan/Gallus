@@ -81,8 +81,7 @@ function preallocate_particle_dict(particle_dict::Dict, file_container::FileType
     global readable_keys
     # Loop through all of the available keys in the first file to determine the size, dim, and 
     # type of the datasets.
-    message = "Preallocating internal particle dictionary..."
-    @showprogress 0.01 message for (i, number_of_particles) in enumerate(header["NumPart_Total"])
+    for (i, number_of_particles) in enumerate(header["NumPart_Total"])
         if number_of_particles == 0 continue end
         pt = i - 1
         file_handle = h5open(file_container.file_name)
@@ -282,7 +281,7 @@ function convert_raw_data_to_units(particle_dict::Dict, file_container::FileType
         delete!(input_dict, key)
     end
 
-    message = "Converting data to Unitful quantities..."
+    message = "Converting simulation data to Unitful quantities..."
     @showprogress 0.01 message for key in keys(particle_dict)
         if key == "Header" continue end
         output_dict[key] = Dict()
@@ -347,27 +346,27 @@ function restructure_particle_dict(particle_dict::Dict)
     ])
 
     all_key_transform = Dict([
-        ("ParticleIDs", "ids"),
-        ("Masses", "masses"),
+        ("ParticleIDs", "id"),
+        ("Masses", "mass"),
         ("Velocities", "velocities"),
         ("Coordinates", "coordinates")
     ])
 
     gas_key_transform = Dict([
-        ("Density", "densities"),
-        ("Temperature", "temperatures"),
-        ("StarFormationRate", "starformationrates"),
-        ("SmoothingLength", "smoothinglengths"),
-        ("Metallicity", "metallicities")
+        ("Density", "density"),
+        ("Temperature", "temperature"),
+        ("StarFormationRate", "star_formation_rate"),
+        ("SmoothingLength", "smoothing_length"),
+        ("Metallicity", "metallicity")
     ])
 
     stars_key_transform = Dict([
-        ("Metallicity", "metallicities"),
-        ("StellarFormationTime", "stellarages")
+        ("Metallicity", "metallicity"),
+        ("StellarFormationTime", "stellar_age")
     ])
 
     bhs_key_transform = Dict([
-        ("BH_Mass", "subgridmasses")
+        ("BH_Mass", "subgrid_mass")
     ])
 
     dark_key_transform = Dict([])

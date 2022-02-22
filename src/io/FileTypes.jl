@@ -12,6 +12,11 @@ using Parameters
 
 abstract type File end
 
+mutable struct Gallus <: File
+    file_name::String
+    parameter_file_name::String
+end
+
 mutable struct Rockstar <: File
     file_name::String
     parameter_file_name::String

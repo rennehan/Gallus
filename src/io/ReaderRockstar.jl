@@ -142,6 +142,7 @@ function convert_raw_data_to_units(halo_dict::Dict, params::Dict)
     # Let us get rid of the Hubble parameter now and forever
     h0 = parse(Float64, params["h0"])
     a = parse(Float64, params["a"])
+
     mass_conv = 1.0u"Msun" / h0
     length_conv = (1.0u"Mpc" / h0) * a
     radius_conv = (1.0u"kpc" / h0) * a

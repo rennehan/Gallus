@@ -1,6 +1,7 @@
 module Halos
+import Base.show, Base.print
 using DataFrames, Unitful, UnitfulAstro, ProgressMeter
-using ..FileTypes, ..Reader
+using ..FileTypes, ..Reader, ..Tools
 import ..Simulation
 
 mutable struct HaloData{T <: FileTypes.File}
@@ -17,17 +18,19 @@ mutable struct HaloData{T <: FileTypes.File}
         halo_data = new{T}()
         halo_dict = Reader.read_file(halo_files)
         halo_data.halos = DataFrame()
-        halo_data.halos[!, "ids"] = halo_dict["ids"]
+        halo_data.halos[!, "id"] = halo_dict["ids"]
         halo_data.gas_list = Dict{UInt32, Array{UInt32}}([])
         halo_data.stars_list = Dict{UInt32, Array{UInt32}}([])
         halo_data.dark_list = Dict{UInt32, Array{UInt32}}([])
         halo_data.bhs_list = Dict{UInt32, Array{UInt32}}([]) 
-        for i in nrow(halo_data.halos)
+        num_halos = nrow(halo_data.halos)
+        for i in 1:num_halos
             halo_data.gas_list[i] = Array{UInt32}(undef, 0)
             halo_data.stars_list[i] = Array{UInt32}(undef, 0)
             halo_data.dark_list[i] = Array{UInt32}(undef, 0)
             halo_data.bhs_list[i] = Array{UInt32}(undef, 0)
         end
+
         mass_keys = ["mvir", "m200", "m500", "m2500"]
         for mass_key in mass_keys
             halo_data.halos[!, mass_key] = halo_dict["masses"][mass_key]
@@ -67,15 +70,6 @@ halos. The main loop is threaded so that it should be reasonably fast.
 ...
 """
 function find_particles_in_halo(halo_data::HaloData, simulation::Simulation)
-    function find_particles_in_cube(coords::Array{Float64}, 
-                                    radius::Float64)
-        # Save some time by only selecting those within the cube
-        x = ifelse.(abs.(@view(coords[1, :])) .< radius, true, false)
-        y = ifelse.(abs.(@view(coords[2, :])) .< radius, true, false)
-        z = ifelse.(abs.(@view(coords[3, :])) .< radius, true, false)
-        x .&& y .&& z
-    end
-
     function generate_particle_lists(all_particles_mask::BitVector, sphere_mask::BitVector)
         idx_list = Array{UInt32}(undef, 0)
         # running_idx corresponds to the index in XYZ_sphere_idx
@@ -92,38 +86,45 @@ function find_particles_in_halo(halo_data::HaloData, simulation::Simulation)
         idx_list
     end
 
-    gas_coords = Array{Unitful.Quantity{Float64}}(undef, 3, length(simulation.gas[!, "x"]))
-    star_coords = Array{Unitful.Quantity{Float64}}(undef, 3, length(simulation.stars[!, "x"]))
-    dark_coords = Array{Unitful.Quantity{Float64}}(undef, 3, length(simulation.dark[!, "x"]))
-    bh_coords = Array{Unitful.Quantity{Float64}}(undef, 3, length(simulation.bhs[!, "x"]))
+    gas_coords = ustrip.(u"kpc", 
+        Tools.build_vector_from_columns(
+            Tools.convert_units(simulation.gas[!, "x"], u"kpc"),
+            Tools.convert_units(simulation.gas[!, "y"], u"kpc"),
+            Tools.convert_units(simulation.gas[!, "z"], u"kpc"),
+            u"kpc"
+        )
+    )
 
-    function conv(var)
-        if var == 1
-            "x"
-        elseif var == 2
-            "y"
-        else
-            "z"
-        end
-    end
+    star_coords = ustrip.(u"kpc", 
+        Tools.build_vector_from_columns(
+            Tools.convert_units(simulation.stars[!, "x"], u"kpc"),
+            Tools.convert_units(simulation.stars[!, "y"], u"kpc"),
+            Tools.convert_units(simulation.stars[!, "z"], u"kpc"),
+            u"kpc"
+        )
+    )
 
-    for i in 1:3
-        gas_coords[i, :] = simulation.gas[!, conv(i)]
-        star_coords[i, :] = simulation.stars[!, conv(i)]
-        dark_coords[i, :] = simulation.dark[!, conv(i)]
-        bh_coords[i, :] = simulation.bhs[!, conv(i)]
-    end
-    
-    gas_coords = ustrip.(Float64, u"kpc", gas_coords)
-    star_coords = ustrip.(Float64, u"kpc", star_coords)
-    dark_coords = ustrip.(Float64, u"kpc", dark_coords)
-    bh_coords = ustrip.(Float64, u"kpc", bh_coords)
+    dark_coords = ustrip.(u"kpc", 
+        Tools.build_vector_from_columns(
+            Tools.convert_units(simulation.dark[!, "x"], u"kpc"),
+            Tools.convert_units(simulation.dark[!, "y"], u"kpc"),
+            Tools.convert_units(simulation.dark[!, "z"], u"kpc"),
+            u"kpc"
+        )
+    )
 
-    r2(coords) = @views @inbounds [sum(abs2, coords[:, j]) for j=1:size(coords)[2]]
-    within_r2(radii2, rvir2) = ifelse.(radii2 .< rvir2, true, false)
+    bh_coords = ustrip.(u"kpc", 
+        Tools.build_vector_from_columns(
+            Tools.convert_units(simulation.bhs[!, "x"], u"kpc"),
+            Tools.convert_units(simulation.bhs[!, "y"], u"kpc"),
+            Tools.convert_units(simulation.bhs[!, "z"], u"kpc"),
+            u"kpc"
+        )
+    )
 
     # TODO: Load balance. Probably randomly shuffling indices is good enough.
     num_halos = nrow(halo_data.halos)
+    p = ProgressMeter.Progress(num_halos, desc = "Finding halo particles...")
     @views @inbounds Threads.@threads for i in 1:num_halos
         halo_position = Array{Float64}(undef, 3)
         halo_position[1] = ustrip(Float64, u"kpc", halo_data.halos[i, "x"])
@@ -134,41 +135,51 @@ function find_particles_in_halo(halo_data::HaloData, simulation::Simulation)
         rvir_squared = rvir^2
 
         offset_gas_coords = gas_coords .- halo_position
-        if Threads.threadid() == 1
-            println(halo_position)
-            println("i=$i")
-        end
-        gas_idx = find_particles_in_cube(offset_gas_coords, rvir)
+        gas_idx = Tools.centered_cube_bitmask(offset_gas_coords, rvir)
         if true in gas_idx
-            gas_sphere_idx = within_r2(r2(offset_gas_coords[:, gas_idx]), rvir_squared)
+            gas_sphere_idx = Tools.less_than_bitmask(
+                Tools.vector_norm_squared(offset_gas_coords[:, gas_idx]),
+                rvir_squared
+            )
             if true in gas_sphere_idx
                 halo_data.gas_list[i] = generate_particle_lists(gas_idx, gas_sphere_idx)
             end
         end
         offset_star_coords = star_coords .- halo_position
-        stars_idx = find_particles_in_cube(offset_star_coords, rvir)
+        stars_idx = Tools.centered_cube_bitmask(offset_star_coords, rvir)
         if true in stars_idx
-            stars_sphere_idx = within_r2(r2(offset_star_coords[:, stars_idx]), rvir_squared)
+            stars_sphere_idx = Tools.less_than_bitmask(
+                Tools.vector_norm_squared(offset_star_coords[:, stars_idx]),
+                rvir_squared
+            )
             if true in stars_sphere_idx
                 halo_data.stars_list[i] = generate_particle_lists(stars_idx, stars_sphere_idx)
             end
         end
         offset_dark_coords = dark_coords .- halo_position
-        dark_idx = find_particles_in_cube(offset_dark_coords, rvir)
+        dark_idx = Tools.centered_cube_bitmask(offset_dark_coords, rvir)
         if true in dark_idx
-            dark_sphere_idx = within_r2(r2(offset_dark_coords[:, dark_idx]), rvir_squared)
+            dark_sphere_idx = Tools.less_than_bitmask(
+                Tools.vector_norm_squared(offset_dark_coords[:, dark_idx]), 
+                rvir_squared
+            )
             if true in dark_sphere_idx
                 halo_data.dark_list[i] = generate_particle_lists(dark_idx, dark_sphere_idx)
             end
         end
         offset_bh_coords = bh_coords .- halo_position
-        bhs_idx = find_particles_in_cube(offset_bh_coords, rvir)
+        bhs_idx = Tools.centered_cube_bitmask(offset_bh_coords, rvir)
         if true in bhs_idx
-            bhs_sphere_idx = within_r2(r2(offset_bh_coords[:, bhs_idx]), rvir_squared)
+            bhs_sphere_idx = Tools.less_than_bitmask(
+                Tools.vector_norm_squared(offset_bh_coords[:, bhs_idx]), 
+                rvir_squared
+            )
             if true in bhs_sphere_idx
                 halo_data.bhs_list[i] = generate_particle_lists(bhs_idx, bhs_sphere_idx)
             end
         end
+
+        ProgressMeter.next!(p)
     end
 end
 
