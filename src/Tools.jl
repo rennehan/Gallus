@@ -47,7 +47,16 @@ convert_units(data::Number, unit::Unitful.FreeUnits) = ustrip(unit, data) * unit
 vector_norm_squared(vector) = @views @inbounds [sum(abs2, vector[:, j]) for j=1:size(vector)[2]]
 less_than_bitmask(a::AbstractArray, b::Number) = ifelse.(a .< b, true, false)
 between_bitmask(a::AbstractArray, b::Number, c::Number) = ifelse.(b .< a .< c, true, false)
-weighted_sum(a::AbstractArray, b::AbstractArray) = sum(a .* b) / sum(a)
+greater_than_bitmask(a::AbstractArray, b::Number) = ifelse.(a .> b, true, false)
+
+function weighted_sum(a::AbstractArray, b::AbstractArray)
+    sum_weight = sum(a)
+    if sum_weight != 0.0
+        sum(a .* b) / sum_weight
+    else
+        0.0
+    end
+end
 
 @views function cross(a::AbstractArray, b::AbstractArray, comp::Int)
     if comp == 1
