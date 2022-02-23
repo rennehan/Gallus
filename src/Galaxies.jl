@@ -7,6 +7,9 @@ import ..Simulation
 mutable struct GalaxyData
     obj::GalaxyData
     galaxies::DataFrames.DataFrame
+    total_galaxies::UInt32
+    galaxy_bitmask::BitVector
+
     gas_total::DataFrames.DataFrame
     stars_total::DataFrames.DataFrame
     dark_total::DataFrames.DataFrame
@@ -46,6 +49,9 @@ mutable struct GalaxyData
         galaxy_data.galaxies = DataFrame()
 
         num_halos = nrow(halo_data.halos)
+
+        # "stars" /must/ be the first key because all of the quantities
+        # are calculated within Rhalf,* and 3Rhalf,*
         keys = ["gas", "stars", "dark", "bhs"]
 
         @inbounds for i=1:3
@@ -59,9 +65,13 @@ mutable struct GalaxyData
 
         galaxy_data.galaxies[!, "half_mass_radius"] = zeros(Float64, num_halos) .* u"kpc"
         galaxy_data.galaxies[!, "radius"] = zeros(Float64, num_halos) .* u"kpc"
+        galaxy_data.galaxies[!, "bulge_mass"] = zeros(Float64, num_halos) .* u"Msun"
+        galaxy_data.galaxies[!, "black_hole_mass"] = zeros(Float64, num_halos) .* u"Msun"
 
-        half_mass_radii = Dict{String, Array{Float64}}([])
-        total_mass_radii = Dict{String, Array{Float64}}([])
+        bulge_masses = zeros(Float64, num_halos)
+        black_hole_masses = zeros(Float64, num_halos)
+        half_mass_radius = zeros(Float64, num_halos)
+        total_mass_radius = zeros(Float64, num_halos)
         masses_half = Dict{String, Array{Float64}}([])
         masses_total = Dict{String, Array{Float64}}([])
         veldisp_half = Dict{String, Array{Float64}}([])
@@ -72,8 +82,6 @@ mutable struct GalaxyData
         sfr_total = Dict{String, Array{Float64}}([])
         save_keys = ["gas", "stars", "dark", "bhs", "baryon", "total"]
         for key in save_keys
-            half_mass_radii[key] = zeros(Float64, num_halos)
-            total_mass_radii[key] = zeros(Float64, num_halos)
             masses_half[key] = zeros(Float64, num_halos)
             masses_total[key] = zeros(Float64, num_halos)
             veldisp_half[key] = zeros(Float64, num_halos)
@@ -102,6 +110,7 @@ mutable struct GalaxyData
         all_masses = Dict{String, Vector{Float64}}([])
         all_velocities = Dict{String, Matrix{Float64}}([])
         all_sfrs = Dict{String, Vector{Float64}}([])
+        all_bh_masses = Dict{String, Vector{Float64}}([])
         for key in keys
             all_coords[key] = ustrip.(
                 u"kpc",
@@ -150,8 +159,17 @@ mutable struct GalaxyData
                 all_metallicities[key] = getfield(simulation, Symbol(key))[!, "metallicity"]
 
                 if key == "gas"
-                    all_sfrs[key] = ustrip.(u"Msun/yr", simulation.gas[!, "star_formation_rate"])
+                    all_sfrs[key] = ustrip.(
+                        u"Msun/yr", 
+                        simulation.gas[!, "star_formation_rate"]
+                    )
                 end
+            end
+            if key == "bhs"
+                all_bh_masses[key] = ustrip.(
+                    u"Msun", 
+                    simulation.bhs[!, "subgrid_mass"]
+                )
             end
         end
 
@@ -217,23 +235,19 @@ mutable struct GalaxyData
             halo_particle_keys = copy(keys)
             to_delete = []
             for key in halo_particle_keys
-                try
-                    if length(getfield(halo_data, Symbol("$key" * "_list"))[i]) < 64
-                        # If there are not enough particles, just remove it from the list
-                        push!(to_delete, key)
-                    end
-                catch
-                    # If there is no list, just ignore?
+                if length(getfield(halo_data, Symbol("$key" * "_list"))[i]) < 1
+                    # If there are not enough particles, just remove it from the list
                     push!(to_delete, key)
                 end
             end
 
-            if length(to_delete) == length(keys)
-                continue
-            end
+            if length(to_delete) == length(keys) continue end
             for key in to_delete
                 deleteat!(halo_particle_keys, findall(x->x==key,halo_particle_keys))
             end
+
+            # A "galaxy" must have stars
+            if !("stars" in halo_particle_keys) continue end
 
             halo_rvir = ustrip(Float64, u"kpc", halo_data.halos[i, "rvir"])
             halo_position = Array{Float64}(undef, 3)
@@ -249,6 +263,7 @@ mutable struct GalaxyData
             # TODO: Needs to be a matrix?
             z_in_halo = Dict{String, Vector{Float64}}([])
             sfrs_in_halo = Dict{String, Vector{Float64}}([])
+            bh_masses_in_halo = Dict{String, Vector{Float64}}([])
             for key in halo_particle_keys
                 # E.g., slice_idx = halo_data.gas_list[i]
                 slice_idx = getfield(halo_data, Symbol("$key" * "_list"))[i]
@@ -264,6 +279,9 @@ mutable struct GalaxyData
                     if key == "gas"
                         sfrs_in_halo[key] = all_sfrs[key][slice_idx]
                     end
+                end
+                if key == "bhs"
+                    bh_masses_in_halo[key] = all_bh_masses[key][slice_idx]
                 end
             end          
 
@@ -281,48 +299,33 @@ mutable struct GalaxyData
             # is nonzero.
             number_of_bins = floor(Int, max_radius / delta_r)
             radii = zeros(Float64, number_of_bins)
-            cumulative_mass = Dict{String, Vector{Float64}}([])
-            done_flags = Dict{String, Bool}([])
-            halo_half_mass_radii = Dict{String, Float64}([])
-            half_total_mass = Dict{String, Float64}([])
-            half_mass_idx = Dict{String, Int}([])
-            total_mass_idx = Dict{String, Int}([])
-            for key in halo_particle_keys
-                cumulative_mass[key] = zeros(Float64, number_of_bins) # Msun
-                done_flags[key] = false
-                halo_half_mass_radii[key] = 0.0  # kpc
-                half_total_mass[key] = 0.0  # Msun
-                half_mass_idx[key] = 1
-                total_mass_idx[key] = 1
-
-                cumulative_mass[key][1] = get_cumulative_masses(
-                    masses_in_halo[key],
-                    particle_radii2[key],
-                    radius
-                )
-                if cumulative_mass[key][1] == 0.0
-                    cumulative_mass[key][1] = tolerance
-                end
-            end
+            cumulative_mass = zeros(Float64, number_of_bins)
+            done_flag = false
+            cumulative_mass[1] = get_cumulative_masses(
+                masses_in_halo["stars"],
+                particle_radii2["stars"],
+                radius
+            )
+            radii[1] = radius
 
             # Keep an index to access the current mass values at radius
             j = 2
-            while false in values(done_flags)
-                for key in halo_particle_keys
-                    if done_flags[key]
-                        continue
-                    end
+            while !done_flag
+                shell_mass = get_shell_mass(masses_in_halo["stars"], particle_radii2["stars"],
+                                            radius, radius + delta_r)
+                cumulative_mass[j] = cumulative_mass[j - 1] + shell_mass
 
-                    shell_mass = get_shell_mass(masses_in_halo[key], particle_radii2[key],
-                                                radius, radius + delta_r)
-                    cumulative_mass[key][j] = cumulative_mass[key][j - 1] + shell_mass
+                # We just integrate all the way out to max_radius
+                # for the SMBHs since they are quite scattered
+                # throughout the halo.
+                done_flag = check_done(
+                    cumulative_mass[j], 
+                    cumulative_mass[j - 1], 
+                    tolerance
+                )
 
-                    if check_done(cumulative_mass[key][j], cumulative_mass[key][j - 1], tolerance)
-                        done_flags[key] = true
-                    end
-                    if radius > max_radius
-                        done_flags[key] = true
-                    end
+                if radius > max_radius
+                    done_flag = true
                 end
                 
                 radii[j] = radius
@@ -330,104 +333,155 @@ mutable struct GalaxyData
                 j += 1
             end
 
+            half_total_mass = 0.0
+            total_mass_idx = 1
+            half_mass_idx = 0
+            # Find the stellar total and half radii indices
+            @inbounds for j=1:number_of_bins
+                k = (number_of_bins - j) + 1
+                if cumulative_mass[k] != 0.0
+                    half_total_mass = cumulative_mass[k] / 2.0
+                    total_mass_idx = k
+                    break
+                end
+            end
+
+            if half_total_mass == 0.0 continue end
+
+            @inbounds for j=1:number_of_bins
+                if cumulative_mass[j] > half_total_mass
+                    half_mass_idx = j - 1
+                    break
+                end
+            end
+
+            # First bin could have all of the mass. Therefore,
+            # won't be able to access the 0th index (j-1). 
+            # When that happens, just store 0.5 * full_radius
+            # as the half mass radius, and don't keep track of 
+            # any of the Rhalf properties.
+            if half_mass_idx != 0
+                half_mass_radius[i] = mean([
+                    radii[half_mass_idx], 
+                    radii[half_mass_idx] + 1
+                ])
+            else
+                half_mass_radius[i] = radii[1] / 2.0
+            end
+
+            # Now compute all of the properties within the half mass radius
+            # and our definition of "total galaxy", 3*Rhalf.
+            #
+            total_mass_radius[i] = mean([
+                radii[total_mass_idx],
+                radii[total_mass_idx] - 1
+            ])
+            
             for key in halo_particle_keys
-                @inbounds for j=1:number_of_bins
-                    k = (number_of_bins - j) + 1
-                    if cumulative_mass[key][k] != 0.0
-                        half_total_mass[key] = cumulative_mass[key][k] / 2.0
-                        total_mass_idx[key] = k
-                        break
-                    end
-                end
-
-                @inbounds for j=1:number_of_bins
-                    if cumulative_mass[key][j] > half_total_mass[key]
-                        half_mass_idx[key] = j - 1
-                        break
-                    end
-                end
-
-                # No mass?
-                if half_mass_idx[key] == 0 continue end
-
-                half_mass_radii[key][i] = mean([
-                    radii[half_mass_idx[key]], 
-                    radii[half_mass_idx[key]] + 1
-                ])
-                total_mass_radii[key][i] = mean([
-                    radii[total_mass_idx[key]],
-                    radii[total_mass_idx[key]] - 1
-                ])
-
-                # Now compute all of the properties within the half mass radius
-                # and our definition of "total galaxy", 3*Rhalf.
-                #
                 # TODO: Remove hard-coded number 3.0
-                half_idx = Tools.less_than_bitmask(
-                    particle_radii2[key],
-                    half_mass_radii[key][i]                   
-                )
-
-                # No mass?
-                if !(true in half_idx) continue end
-
                 full_idx = Tools.less_than_bitmask(
                     particle_radii2[key],
-                    3.0 * half_mass_radii[key][i]                 
+                    (3.0 * half_mass_radius[i])^2.0           
                 )
-                masses_half[key][i] = half_total_mass[key]
-                masses_total[key][i] = cumulative_mass[key][total_mass_idx[key]]
-                veldisp_half[key][i] = std(vel_norms[key][half_idx])
-                veldisp_total[key][i] = std(vel_norms[key][full_idx])
+                half_idx = Tools.less_than_bitmask(
+                    particle_radii2[key],
+                    half_mass_radius[i]^2.0               
+                )
 
-                @inbounds for j=1:3
-                    cross_half_j = Tools.cross(
-                        offset_coords[key][:, half_idx], 
-                        vels_in_halo[key][:, half_idx], 
-                        j
-                    )
-                    cross_total_j = Tools.cross(
-                        offset_coords[key][:, full_idx], 
-                        vels_in_halo[key][:, full_idx], 
-                        j
-                    )
-                    angular_momenta_half[key][j, i] = sum(cross_half_j)
-                    angular_momenta_total[key][j, i] = sum(cross_total_j)
+                # Sometimes there could be no particles in Rhalf
+                if true in half_idx
+                    masses_half[key][i] = sum(masses_in_halo[key][half_idx])
+                    veldisp_half[key][i] = std(vel_norms[key][half_idx])
+                    true_count = 0
+                    key_map = Array{Int}(undef, 0)
+                    @inbounds for j=1:length(half_idx) 
+                        if half_idx[j] 
+                            true_count += 1 
+                            push!(key_map, j)
+                        end 
+                    end
+                    cross_half = zeros(Float64, 3, true_count)
+                    @views @inbounds for j=1:3
+                        cross_half[j, :] = Tools.cross(
+                            offset_coords[key][:, half_idx], 
+                            vels_in_halo[key][:, half_idx], 
+                            j
+                        )
+                        angular_momenta_half[key][j, i] = sum(cross_half[j])
+                    end
+
+                    if key == "gas"
+                        sfr_half[key][i] = sum(sfrs_in_halo[key][half_idx])
+
+                        z_half["z_sfr"][i] = Tools.weighted_sum(
+                            sfrs_in_halo[key][half_idx], 
+                            z_in_halo[key][half_idx]
+                        )
+
+                        z_half["z_mass"][i] = Tools.weighted_sum(
+                            masses_in_halo[key][half_idx], 
+                            z_in_halo[key][half_idx]
+                        )
+                    end
+                    if key == "stars"
+                        z_half[key][i] = median(z_in_halo[key][half_idx])
+
+                        # Determine how much stellar mass is counter-rotating
+                        # to determine the bulge mass.
+                        # M_bulge ~ 2 * M_counter (<Rhalf)
+                        counter_rotating_mass = 0.0
+                        @views @inbounds for j=1:size(cross_half)[2]
+                            if sum(angular_momenta_half[key][:, i] .* cross_half[:, j]) < 0
+                                counter_rotating_mass += masses_in_halo[key][key_map[j]]
+                            end
+                        end
+
+                        bulge_masses[i] = 2.0 * counter_rotating_mass
+                    end
                 end
 
-                if key == "gas"
-                    sfr_half[key][i] = sum(sfrs_in_halo[key][half_idx])
-                    sfr_total[key][i] = sum(sfrs_in_halo[key][full_idx])
+                if true in full_idx
+                    masses_total[key][i] = sum(masses_in_halo[key][full_idx])
+                    veldisp_total[key][i] = std(vel_norms[key][full_idx])
 
-                    z_half["z_sfr"][i] = Tools.weighted_sum(
-                        sfrs_in_halo[key][half_idx], 
-                        z_in_halo[key][half_idx]
-                    )
-                    z_total["z_sfr"][i] = Tools.weighted_sum(
-                        sfrs_in_halo[key][full_idx], 
-                        z_in_halo[key][full_idx]
-                    )
+                    @views @inbounds for j=1:3
+                        cross_total_j = Tools.cross(
+                            offset_coords[key][:, full_idx], 
+                            vels_in_halo[key][:, full_idx], 
+                            j
+                        )
+                        angular_momenta_total[key][j, i] = sum(cross_total_j)
+                    end
 
-                    z_half["z_mass"][i] = Tools.weighted_sum(
-                        masses_in_halo[key][half_idx], 
-                        z_in_halo[key][half_idx]
-                    )
-                    z_total["z_mass"][i] = Tools.weighted_sum(
-                        masses_in_halo[key][full_idx], 
-                        z_in_halo[key][full_idx]
-                    )
-                end
-                if key == "stars"
-                    z_half[key][i] = median(z_in_halo[key][half_idx])
-                    z_total[key][i] = median(z_in_halo[key][full_idx])
+                    if key == "gas"
+                        sfr_total[key][i] = sum(sfrs_in_halo[key][full_idx])
+
+                        z_total["z_sfr"][i] = Tools.weighted_sum(
+                            sfrs_in_halo[key][full_idx], 
+                            z_in_halo[key][full_idx]
+                        )
+
+                        z_total["z_mass"][i] = Tools.weighted_sum(
+                            masses_in_halo[key][full_idx], 
+                            z_in_halo[key][full_idx]
+                        )
+                    end
+                    if key == "stars"
+                        z_total[key][i] = median(z_in_halo[key][full_idx])
+                    end
+                    if key == "bhs"
+                        black_hole_masses[i] = bh_masses_in_halo[key][argmin(particle_radii2[key])]
+                    end
                 end
             end
 
             ProgressMeter.next!(p)
         end
 
-        galaxy_data.galaxies[!, "half_mass_radius"] = half_mass_radii["stars"] .* u"kpc"
-        galaxy_data.galaxies[!, "radius"] = 3.0 .* half_mass_radii["stars"] .* u"kpc"
+        galaxy_data.galaxies[!, "half_mass_radius"] = half_mass_radius .* u"kpc"
+        galaxy_data.galaxies[!, "radius"] = 3.0 .* half_mass_radius .* u"kpc"
+        galaxy_data.galaxies[!, "bulge_mass"] = bulge_masses .* u"Msun"
+        galaxy_data.galaxies[!, "black_hole_mass"] = black_hole_masses .* u"Msun"
 
         # I do not see a way to set DataFrame columns using the setfield()
         # method, so I have to do it manually at this point.
@@ -436,14 +490,14 @@ mutable struct GalaxyData
             total_df = DataFrame()
 
             half_df[!, "mass"] = masses_half[key] .* u"Msun"
-            half_df[!, "radius"] = half_mass_radii[key] .* u"kpc"
+            half_df[!, "radius"] = half_mass_radius .* u"kpc"
             half_df[!, "velocity_dispersion"] = veldisp_half[key] .* u"km/s"
             half_df[!, "jx"] = angular_momenta_half[key][1, :] .* u"kpc * km/s"
             half_df[!, "jy"] = angular_momenta_half[key][2, :] .* u"kpc * km/s"
             half_df[!, "jz"] = angular_momenta_half[key][3, :] .* u"kpc * km/s"
 
             total_df[!, "mass"] = masses_total[key] .* u"Msun"
-            total_df[!, "radius"] = total_mass_radii[key] .* u"kpc"
+            total_df[!, "radius"] = total_mass_radius .* u"kpc"
             total_df[!, "velocity_dispersion"] = veldisp_total[key] .* u"km/s"
             total_df[!, "jx"] = angular_momenta_total[key][1, :] .* u"kpc * km/s"
             total_df[!, "jy"] = angular_momenta_total[key][2, :] .* u"kpc * km/s"
@@ -467,6 +521,17 @@ mutable struct GalaxyData
             setfield!(galaxy_data, Symbol("$key" * "_half"), half_df)
             setfield!(galaxy_data, Symbol("$key" * "_total"), total_df)
         end
+
+        galaxy_data.galaxy_bitmask = Tools.greater_than_bitmask(
+            galaxy_data.stars_total[!, "mass"],
+            0.0 * u"Msun"
+        )
+        galaxy_data.total_galaxies = length(
+            galaxy_data.stars_total[
+                galaxy_data.galaxy_bitmask,
+                "mass"
+            ]
+        )
 
         galaxy_data
     end

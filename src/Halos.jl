@@ -1,7 +1,7 @@
 module Halos
 import Base.show, Base.print
 using DataFrames, Unitful, UnitfulAstro, ProgressMeter
-using ..FileTypes, ..Reader, ..Tools
+using ..FileTypes, ..Reader, ..Writer, ..Tools
 import ..Simulation
 
 mutable struct HaloData{T <: FileTypes.File}
@@ -57,6 +57,16 @@ mutable struct HaloData{T <: FileTypes.File}
 end
 show(io::IO, h::HaloData) = show(io, "Created HaloData structure!")
 
+function save_particles_in_halo(halo_data::HaloData, file_container::FileTypes.Gallus)
+    keys = ["gas", "stars", "dark", "bhs"]
+    data = Dict{String, Dict{UInt32, Array{UInt32}}}([])
+    for key in keys
+        data[key] = getfield(halo_data, Symbol("$key" * "_list"))
+    end
+
+    Writer.save_file(file_container, data)
+end
+
 """
     Halos.find_particles_in_halo(halo_data::HaloData, simulation::Simulation)
 
@@ -67,9 +77,21 @@ halos. The main loop is threaded so that it should be reasonably fast.
 # Arguments
 - `halo_data::HaloData`: The previously constructed HaloData struct.
 - `simulation::Simulation`: The main simulation structure containing particle data.
+- `file_container::FileTypes.Gallus`: File container for Gallus files to read/save halos.
 ...
 """
-function find_particles_in_halo(halo_data::HaloData, simulation::Simulation)
+function find_particles_in_halo(halo_data::HaloData, simulation::Simulation, 
+                                file_container::FileTypes.Gallus)
+    if isfile(file_container.file_name)
+        data = Reader.read_file(file_container)
+        keys = ["gas", "stars", "dark", "bhs"]
+        for key in keys
+            setfield!(halo_data, Symbol("$key" * "_list"), data[key]) 
+        end
+
+        return
+    end
+
     function generate_particle_lists(all_particles_mask::BitVector, sphere_mask::BitVector)
         idx_list = Array{UInt32}(undef, 0)
         # running_idx corresponds to the index in XYZ_sphere_idx
@@ -181,6 +203,8 @@ function find_particles_in_halo(halo_data::HaloData, simulation::Simulation)
 
         ProgressMeter.next!(p)
     end
+
+    save_particles_in_halo(halo_data, file_container)
 end
 
 end
