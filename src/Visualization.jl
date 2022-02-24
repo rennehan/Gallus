@@ -40,7 +40,7 @@ function galaxy_stellar_mass_function(galaxy_data::Galaxies.GalaxyData, volume::
     stellar_masses = log10.(ustrip.(u"Msun", galaxy_data.stars_total[!, "mass"]))
     bins = [ count(x->(lb <= x < lb+step_size), stellar_masses) for lb in sample_space]
 
-    plot(
+    Plots.plot(
         sample_space .+ (step_size / 2.0), 
         bins ./ (step_size * volume), 
         yaxis=:log,
