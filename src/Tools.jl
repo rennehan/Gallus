@@ -49,6 +49,10 @@ less_than_bitmask(a::AbstractArray, b::Number) = ifelse.(a .< b, true, false)
 between_bitmask(a::AbstractArray, b::Number, c::Number) = ifelse.(b .< a .< c, true, false)
 greater_than_bitmask(a::AbstractArray, b::Number) = ifelse.(a .> b, true, false)
 
+function shift_coordinates(a::AbstractArray, b::AbstractArray)
+    a .= a .- b
+end
+
 function weighted_sum(a::AbstractArray, b::AbstractArray)
     sum_weight = sum(a)
     if sum_weight != 0.0

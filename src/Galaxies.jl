@@ -307,6 +307,7 @@ mutable struct GalaxyData
                 radius
             )
             radii[1] = radius
+            radius += delta_r
 
             # Keep an index to access the current mass values at radius
             j = 2
@@ -391,7 +392,7 @@ mutable struct GalaxyData
                 # Sometimes there could be no particles in Rhalf
                 if true in half_idx
                     masses_half[key][i] = sum(masses_in_halo[key][half_idx])
-                    veldisp_half[key][i] = std(vel_norms[key][half_idx])
+
                     true_count = 0
                     key_map = Array{Int}(undef, 0)
                     @inbounds for j=1:length(half_idx) 
@@ -400,6 +401,27 @@ mutable struct GalaxyData
                             push!(key_map, j)
                         end 
                     end
+
+                    # std() gives NaN by default for 1-element instead
+                    # of crashing
+                    if true_count > 1
+                        veldisp_half[key][i] = std(vel_norms[key][half_idx])
+                    end
+                    center_of_mass = zeros(Float64, 3)
+                    @views @inbounds for j=1:3
+                        center_of_mass[j] = Tools.weighted_sum(
+                            masses_in_halo[key][half_idx],
+                            offset_coords[key][j, half_idx]
+                        )
+                    end
+
+                    # The angular momentum for each component is with
+                    # respect to the center of mass of each component.
+                    Tools.shift_coordinates(
+                        offset_coords[key][:, half_idx],
+                        center_of_mass
+                    )
+
                     cross_half = zeros(Float64, 3, true_count)
                     @views @inbounds for j=1:3
                         cross_half[j, :] = Tools.cross(
@@ -409,6 +431,11 @@ mutable struct GalaxyData
                         )
                         angular_momenta_half[key][j, i] = sum(cross_half[j])
                     end
+
+                    Tools.shift_coordinates(
+                        offset_coords[key][:, half_idx],
+                        -1.0 .* center_of_mass
+                    )
 
                     if key == "gas"
                         sfr_half[key][i] = sum(sfrs_in_halo[key][half_idx])
@@ -442,7 +469,26 @@ mutable struct GalaxyData
 
                 if true in full_idx
                     masses_total[key][i] = sum(masses_in_halo[key][full_idx])
-                    veldisp_total[key][i] = std(vel_norms[key][full_idx])
+
+                    # std() gives NaN by default for 1 element instead of 
+                    # crashing.
+                    if length(vel_norms[key][full_idx]) > 1
+                        veldisp_total[key][i] = std(vel_norms[key][full_idx])
+                    end
+
+                    center_of_mass = zeros(Float64, 3)
+                    @views @inbounds for j=1:3
+                        center_of_mass[j] = Tools.weighted_sum(
+                            masses_in_halo[key][full_idx],
+                            offset_coords[key][j, full_idx]
+                        )
+                    end
+                    # The angular momentum for each component is with
+                    # respect to the center of mass of each component.
+                    Tools.shift_coordinates(
+                        offset_coords[key][:, full_idx],
+                        center_of_mass
+                    )
 
                     @views @inbounds for j=1:3
                         cross_total_j = Tools.cross(
@@ -452,6 +498,11 @@ mutable struct GalaxyData
                         )
                         angular_momenta_total[key][j, i] = sum(cross_total_j)
                     end
+
+                    Tools.shift_coordinates(
+                        offset_coords[key][:, full_idx],
+                        -1.0 .* center_of_mass
+                    )
 
                     if key == "gas"
                         sfr_total[key][i] = sum(sfrs_in_halo[key][full_idx])
