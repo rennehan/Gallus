@@ -465,6 +465,9 @@ mutable struct GalaxyData
 
                         bulge_masses[i] = 2.0 * counter_rotating_mass
                     end
+                    if key == "bhs"
+                        black_hole_masses[i] = maximum(bh_masses_in_halo[key][half_idx])
+                    end
                 end
 
                 if true in full_idx
@@ -519,9 +522,6 @@ mutable struct GalaxyData
                     end
                     if key == "stars"
                         z_total[key][i] = median(z_in_halo[key][full_idx])
-                    end
-                    if key == "bhs"
-                        black_hole_masses[i] = bh_masses_in_halo[key][argmin(particle_radii2[key])]
                     end
                 end
             end
