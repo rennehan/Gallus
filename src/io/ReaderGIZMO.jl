@@ -255,7 +255,7 @@ function convert_raw_data_to_units(particle_dict::Dict, file_container::FileType
         end
     catch KeyError
         # Newer versions of GIZMO have this!
-        header["OmegaLambda"] = copy(header["OmegaLambda"])
+        header["OmegaLambda"] = copy(header["Omega_Lambda"])
         if header["Omega_Lambda"] != 0
             scale_factor = header["Time"]
         end
@@ -263,10 +263,12 @@ function convert_raw_data_to_units(particle_dict::Dict, file_container::FileType
 
     mass_conv = units_dict["unit_mass"]
     length_conv = units_dict["unit_length"] * scale_factor
-    velocity_conv = units_dict["unit_velocity"] / sqrt(scale_factor)
-    time_conv = length_conv / (velocity_conv * sqrt(scale_factor))
-    metal_conv = 1.0 / 0.0134  # Asplund 2009
-    specific_energy_conv = (velocity_conv * sqrt(scale_factor))^2
+    # GIZMO stores velocity with (1.0 / sqrt(a)) factor built-in; 
+    # need to remove here.
+    velocity_conv = units_dict["unit_velocity"] * sqrt(scale_factor)
+    time_conv = length_conv / (velocity_conv / sqrt(scale_factor))
+    metal_conv = 1.0 / 0.0134  # To Zsun from Asplund 2009
+    specific_energy_conv = (velocity_conv / sqrt(scale_factor))^2
 
     # Assume gamma = 5.0 / 3.0
     m_p_gamma_over_k_B = m_p * (5.0 / 3.0 - 1.0) / k_B
