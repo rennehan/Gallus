@@ -1,6 +1,7 @@
 module Gallus
 
 include("Tools.jl")
+include("io/FileTypes.jl")
 include("io/ReaderMaster.jl")
 include("io/WriterMaster.jl")
 include("Simulation.jl")

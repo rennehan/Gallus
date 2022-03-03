@@ -1,8 +1,7 @@
 module Halos
 import Base.show, Base.print
 using DataFrames, Unitful, UnitfulAstro, ProgressMeter
-using ..FileTypes, ..Reader, ..Writer, ..Tools
-import ..Simulation
+using ..FileTypes, ..Reader, ..Writer, ..Tools, ..Simulation
 
 mutable struct HaloData{T <: FileTypes.File}
     obj::HaloData
@@ -68,7 +67,7 @@ function save_particles_in_halo(halo_data::HaloData, file_container::FileTypes.G
 end
 
 """
-    Halos.find_particles_in_halo(halo_data::HaloData, simulation::Simulation)
+    Halos.find_particles_in_halo(halo_data::HaloData, sim_data::Simulation.SimulationData)
 
 Takes all of the particle coordinates to determine which particles are in which 
 halos. The main loop is threaded so that it should be reasonably fast.
@@ -76,11 +75,11 @@ halos. The main loop is threaded so that it should be reasonably fast.
 ...
 # Arguments
 - `halo_data::HaloData`: The previously constructed HaloData struct.
-- `simulation::Simulation`: The main simulation structure containing particle data.
+- `sim_data::Simulation.SimulationData`: The main simulation structure containing particle data.
 - `file_container::FileTypes.Gallus`: File container for Gallus files to read/save halos.
 ...
 """
-function find_particles_in_halo(halo_data::HaloData, simulation::Simulation, 
+function find_particles_in_halo(halo_data::HaloData, sim_data::Simulation.SimulationData, 
                                 file_container::FileTypes.Gallus)
     if isfile(file_container.file_name)
         data = Reader.read_file(file_container)
@@ -108,40 +107,24 @@ function find_particles_in_halo(halo_data::HaloData, simulation::Simulation,
         idx_list
     end
 
-    gas_coords = ustrip.(u"kpc", 
-        Tools.build_vector_from_columns(
-            Tools.convert_units(simulation.gas[!, "x"], u"kpc"),
-            Tools.convert_units(simulation.gas[!, "y"], u"kpc"),
-            Tools.convert_units(simulation.gas[!, "z"], u"kpc"),
-            u"kpc"
-        )
+    gas_coords = ustrip.(
+        u"kpc",
+        Simulation.get_field(sim_data, "gas", "coordinates")
     )
 
-    star_coords = ustrip.(u"kpc", 
-        Tools.build_vector_from_columns(
-            Tools.convert_units(simulation.stars[!, "x"], u"kpc"),
-            Tools.convert_units(simulation.stars[!, "y"], u"kpc"),
-            Tools.convert_units(simulation.stars[!, "z"], u"kpc"),
-            u"kpc"
-        )
+    star_coords = ustrip.(
+        u"kpc", 
+        Simulation.get_field(sim_data, "stars", "coordinates")
     )
 
-    dark_coords = ustrip.(u"kpc", 
-        Tools.build_vector_from_columns(
-            Tools.convert_units(simulation.dark[!, "x"], u"kpc"),
-            Tools.convert_units(simulation.dark[!, "y"], u"kpc"),
-            Tools.convert_units(simulation.dark[!, "z"], u"kpc"),
-            u"kpc"
-        )
+    dark_coords = ustrip.(
+        u"kpc", 
+        Simulation.get_field(sim_data, "dark", "coordinates")
     )
 
-    bh_coords = ustrip.(u"kpc", 
-        Tools.build_vector_from_columns(
-            Tools.convert_units(simulation.bhs[!, "x"], u"kpc"),
-            Tools.convert_units(simulation.bhs[!, "y"], u"kpc"),
-            Tools.convert_units(simulation.bhs[!, "z"], u"kpc"),
-            u"kpc"
-        )
+    bh_coords = ustrip.(
+        u"kpc", 
+        Simulation.get_field(sim_data, "bhs", "coordinates")
     )
 
     # TODO: Load balance. Probably randomly shuffling indices is good enough.

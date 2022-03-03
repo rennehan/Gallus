@@ -1,10 +1,9 @@
 module Visualization
 using Distributions, Plots, PyPlot, Unitful, UnitfulAstro
-using ..Halos, ..Galaxies, ..Tools
-import ..Simulation
+using ..Halos, ..Galaxies, ..Tools, ..Simulation
 
 function quick_view(halo_data::Halos.HaloData, 
-                    simulation::Simulation,
+                    sim_data::Simulation.SimulationData,
                     idx::Int, 
                     key::String)
     halo_position = Array{Unitful.Quantity{Float64}}(undef, 3)
@@ -16,15 +15,9 @@ function quick_view(halo_data::Halos.HaloData,
     if length(particle_idx) == 0
         println("No particles to show!")
     else
-        key_sym = Symbol(key)
         particle_coords = ustrip.(
             u"kpc",
-            Tools.build_vector_from_columns(
-                Tools.convert_units(getfield(simulation, key_sym)[particle_idx, "x"], u"kpc"),
-                Tools.convert_units(getfield(simulation, key_sym)[particle_idx, "y"], u"kpc"),
-                Tools.convert_units(getfield(simulation, key_sym)[particle_idx, "z"], u"kpc"),
-                u"kpc"
-            )
+            Simulation.get_field(sim_data, key, "coordinates"),
         )
 
         view_coords = particle_coords .- halo_position

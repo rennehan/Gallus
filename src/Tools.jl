@@ -54,12 +54,7 @@ function shift_coordinates(a::AbstractArray, b::AbstractArray)
 end
 
 function weighted_sum(a::AbstractArray, b::AbstractArray)
-    sum_weight = sum(a)
-    if sum_weight != 0.0
-        sum(a .* b) / sum_weight
-    else
-        0.0
-    end
+    ifelse(sum(a) != 0.0, sum(a .* b) / sum(a), 0.0)
 end
 
 @views function cross(a::AbstractArray, b::AbstractArray, comp::Int)
@@ -70,6 +65,51 @@ end
     else
         a[1, :].*b[2, :] .- a[2, :].*b[1, :]
     end
+end
+
+function get_cumulative_property(property::Vector{Float64}, 
+                                 coords::Matrix{Float64}, 
+                                 radius::Float64)
+    sum(property[
+        Tools.less_than_bitmask(
+            Tools.vector_norm_squared(coords),
+            radius^2
+        )
+    ])
+end
+function get_cumulative_property(property::Vector{Float64},
+                                 radii_squared::Vector{Float64},
+                                 radius::Float64)
+    sum(property[
+        Tools.less_than_bitmask(
+            radii_squared,
+            radius^2
+        )
+    ])
+end
+function get_shell_property(property::Vector{Float64},
+                            coords::Matrix{Float64},
+                            radius_start::Float64,
+                            radius_end::Float64)
+    sum(property[
+        Tools.between_bitmask(
+            Tools.vector_norm_squared(coords),
+            radius_start^2,
+            radius_end^2
+        )
+    ])
+end
+function get_shell_property(property::Vector{Float64},
+                            radii_squared::Vector{Float64},
+                            radius_start::Float64,
+                            radius_end::Float64)
+    sum(property[
+        Tools.between_bitmask(
+            radii_squared,
+            radius_start^2,
+            radius_end^2
+        )
+    ])
 end
 
 end

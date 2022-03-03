@@ -1,72 +1,89 @@
+module Simulation
 import Base.show, Base.print
-using DataFrames
-mutable struct Simulation{T <: FileTypes.File}
-    obj::Simulation
+using DataFrames, Unitful, UnitfulAstro
+using ..Tools, ..FileTypes, ..Reader
+
+mutable struct SimulationData{T <: FileTypes.File}
+    obj::SimulationData
     simulation_files::T
-    gas::DataFrames.DataFrame
-    stars::DataFrames.DataFrame
-    dark::DataFrames.DataFrame
-    bhs::DataFrames.DataFrame
-    function Simulation(simulation_files::T) where T
-        simulation = new{T}()
-        particle_dict = Reader.read_file(simulation_files)
-        simulation.gas = DataFrame()
-        simulation.stars = DataFrame()
-        simulation.dark = DataFrame()
-        simulation.bhs = DataFrame()
-        for key in keys(particle_dict["gas"])
-            if key == "coordinates"
-                simulation.gas[!, "x"] = particle_dict["gas"][key][1, :]
-                simulation.gas[!, "y"] = particle_dict["gas"][key][2, :]
-                simulation.gas[!, "z"] = particle_dict["gas"][key][3, :]
-            elseif key == "velocities"
-                simulation.gas[!, "vx"] = particle_dict["gas"][key][1, :]
-                simulation.gas[!, "vy"] = particle_dict["gas"][key][2, :]
-                simulation.gas[!, "vz"] = particle_dict["gas"][key][3, :]
-            else
-                simulation.gas[!, key] = particle_dict["gas"][key]
-            end
+    cell_data::Dict
+    loaded_fields::Dict
+    function SimulationData(simulation_files::T) where T
+        sim_data = new{T}()
+        sim_data.simulation_files = simulation_files
+        sim_data.cell_data = Dict()
+        keys = ["gas", "stars", "dark", "bhs"]
+        for key in keys
+            sim_data.cell_data[key] = DataFrame()
         end
-        for key in keys(particle_dict["stars"])
-            if key == "coordinates"
-                simulation.stars[!, "x"] = particle_dict["stars"][key][1, :]
-                simulation.stars[!, "y"] = particle_dict["stars"][key][2, :]
-                simulation.stars[!, "z"] = particle_dict["stars"][key][3, :]
-            elseif key == "velocities"
-                simulation.stars[!, "vx"] = particle_dict["stars"][key][1, :]
-                simulation.stars[!, "vy"] = particle_dict["stars"][key][2, :]
-                simulation.stars[!, "vz"] = particle_dict["stars"][key][3, :]
-            else
-                simulation.stars[!, key] = particle_dict["stars"][key]
-            end
-        end
-        for key in keys(particle_dict["dark"])
-            if key == "coordinates"
-                simulation.dark[!, "x"] = particle_dict["dark"][key][1, :]
-                simulation.dark[!, "y"] = particle_dict["dark"][key][2, :]
-                simulation.dark[!, "z"] = particle_dict["dark"][key][3, :]
-            elseif key == "velocities"
-                simulation.dark[!, "vx"] = particle_dict["dark"][key][1, :]
-                simulation.dark[!, "vy"] = particle_dict["dark"][key][2, :]
-                simulation.dark[!, "vz"] = particle_dict["dark"][key][3, :]
-            else
-                simulation.dark[!, key] = particle_dict["dark"][key]
-            end
-        end
-        for key in keys(particle_dict["bhs"])
-            if key == "coordinates"
-                simulation.bhs[!, "x"] = particle_dict["bhs"][key][1, :]
-                simulation.bhs[!, "y"] = particle_dict["bhs"][key][2, :]
-                simulation.bhs[!, "z"] = particle_dict["bhs"][key][3, :]
-            elseif key == "velocities"
-                simulation.bhs[!, "vx"] = particle_dict["bhs"][key][1, :]
-                simulation.bhs[!, "vy"] = particle_dict["bhs"][key][2, :]
-                simulation.bhs[!, "vz"] = particle_dict["bhs"][key][3, :]
-            else
-                simulation.bhs[!, key] = particle_dict["bhs"][key]
-            end
-        end
-        simulation
+
+        sim_data.loaded_fields = Dict{String, Bool}([])
+        sim_data
     end
 end
-show(io::IO, s::Simulation) = show(io, "Created Simulation structure!")
+show(io::IO, s::SimulationData) = show(io, "Created SimulationData structure!")
+
+function field_present(sim_data::SimulationData, cell_type::String, field_name::String)
+    ifelse("$cell_type-$field_name" in keys(sim_data.loaded_fields), true, false)
+end
+
+function get_field(sim_data::SimulationData, cell_type::String, field_name::String)
+    if field_present(sim_data, cell_type, field_name)
+        if field_name == "coordinates"
+            Tools.build_vector_from_columns(
+                sim_data.cell_data[cell_type][!, "x"],
+                sim_data.cell_data[cell_type][!, "y"],
+                sim_data.cell_data[cell_type][!, "z"],
+                u"kpc"
+            )
+        elseif field_name == "velocities"
+            Tools.build_vector_from_columns(
+                sim_data.cell_data[cell_type][!, "vx"],
+                sim_data.cell_data[cell_type][!, "vy"],
+                sim_data.cell_data[cell_type][!, "vz"],
+                u"km/s"
+            )
+        else
+            # cell_data is a dictionary with keys "gas", "stars", "dark", "bhs"
+            # with each element containing a DataFrame
+            sim_data.cell_data[cell_type][!, field_name] 
+        end
+    else
+        data_from_file = Reader.read_field_from_file(
+            sim_data.simulation_files, 
+            cell_type, 
+            field_name
+        )
+        sim_data.loaded_fields["$cell_type-$field_name"] = true
+        if field_name == "coordinates"
+            for i=1:3
+                sim_data.cell_data[cell_type][!, Tools.idx_to_axis(i)] = data_from_file[i, :]
+            end
+
+            Tools.build_vector_from_columns(
+                sim_data.cell_data[cell_type][!, "x"],
+                sim_data.cell_data[cell_type][!, "y"],
+                sim_data.cell_data[cell_type][!, "z"],
+                u"kpc"
+            )
+        elseif field_name == "velocities"
+            for i=1:3
+                sim_data.cell_data[cell_type][!, Tools.idx_to_axis(i, "v")] = data_from_file[i, :]
+            end
+
+            Tools.build_vector_from_columns(
+                sim_data.cell_data[cell_type][!, "vx"],
+                sim_data.cell_data[cell_type][!, "vy"],
+                sim_data.cell_data[cell_type][!, "vz"],
+                u"km/s"
+            )
+        else
+            println(cell_type)
+            println(field_name)
+            sim_data.cell_data[cell_type][!, field_name] = data_from_file
+            sim_data.cell_data[cell_type][!, field_name]
+        end
+    end
+end
+
+end

@@ -2,7 +2,7 @@ module Galaxies
 import Base.show, Base.print
 using DataFrames, Unitful, UnitfulAstro, ..FileTypes, ..Halos, ..Tools
 using Plots, ProgressMeter, Statistics, LinearAlgebra
-import ..Simulation
+using ..Simulation
 
 mutable struct GalaxyData
     obj::GalaxyData
@@ -34,17 +34,17 @@ mutable struct GalaxyData
     end
 
     """
-        GalaxyData(halo_data::Halos.HaloData, simulation::Simulation)
+        GalaxyData(halo_data::Halos.HaloData, sim_data::Simulation.SimulationData)
 
     Create a new galaxy list from a given set of Gallus Halos.
 
     ...
     # Arguments
     - `halo_data::Halos.HaloData`: The master HaloData object loaded by Gallus.
-    - `simulation::Simulation`: The master Simulation structure.
+    - `sim_data::Simulation.SimulationData`: The master Simulation structure.
     ...
     """
-    function GalaxyData(halo_data::Halos.HaloData, simulation::Simulation)
+    function GalaxyData(halo_data::Halos.HaloData, sim_data::Simulation.SimulationData)
         galaxy_data = new()
         galaxy_data.galaxies = DataFrame()
 
@@ -114,115 +114,43 @@ mutable struct GalaxyData
         for key in keys
             all_coords[key] = ustrip.(
                 u"kpc",
-                Tools.build_vector_from_columns(
-                    Tools.convert_units(
-                        getfield(simulation, Symbol(key))[!, "x"], 
-                        u"kpc"
-                    ),
-                    Tools.convert_units(
-                        getfield(simulation, Symbol(key))[!, "y"], 
-                        u"kpc"
-                    ),
-                    Tools.convert_units(
-                        getfield(simulation, Symbol(key))[!, "z"], 
-                        u"kpc"
-                    ),
-                    u"kpc"
-                )
+                Simulation.get_field(sim_data, key, "coordinates")
             )
 
             all_velocities[key] = ustrip.(
                 u"km/s",
-                Tools.build_vector_from_columns(
-                    Tools.convert_units(
-                        getfield(simulation, Symbol(key))[!, "vx"], 
-                        u"km/s"
-                    ),
-                    Tools.convert_units(
-                        getfield(simulation, Symbol(key))[!, "vy"], 
-                        u"km/s"
-                    ),
-                    Tools.convert_units(
-                        getfield(simulation, Symbol(key))[!, "vz"], 
-                        u"km/s"
-                    ),
-                    u"km/s"
-                )
+                Simulation.get_field(sim_data, key, "velocities")
             )
 
             all_masses[key] = ustrip.(
                 u"Msun",
-                getfield(simulation, Symbol(key))[!, "mass"]
+                Simulation.get_field(sim_data, key, "mass")
             )
 
             if key == "gas" || key == "stars"
-                all_metallicities[key] = getfield(simulation, Symbol(key))[!, "metallicity"]
+                all_metallicities[key] = Simulation.get_field(
+                    sim_data,
+                    key,
+                    "metal_mass_fraction"
+                )
 
                 if key == "gas"
                     all_sfrs[key] = ustrip.(
                         u"Msun/yr", 
-                        simulation.gas[!, "star_formation_rate"]
+                        Simulation.get_field(sim_data, "gas", "star_formation_rate")
                     )
                 end
             end
             if key == "bhs"
                 all_bh_masses[key] = ustrip.(
                     u"Msun", 
-                    simulation.bhs[!, "subgrid_mass"]
+                    Simulation.get_field(sim_data, "bhs", "subgrid_mass")
                 )
             end
         end
 
-        function get_cumulative_masses(mass::Vector{Float64}, 
-                                       coords::Matrix{Float64}, 
-                                       radius::Float64)
-            sum(mass[
-                Tools.less_than_bitmask(
-                    Tools.vector_norm_squared(coords),
-                    radius^2
-                )
-            ])
-        end
-        function get_cumulative_masses(mass::Vector{Float64},
-                                       radii_squared::Vector{Float64},
-                                       radius::Float64)
-            sum(mass[
-                Tools.less_than_bitmask(
-                    radii_squared,
-                    radius^2
-                )
-            ])
-        end
-        function get_shell_mass(mass::Vector{Float64},
-                                coords::Matrix{Float64},
-                                radius_start::Float64,
-                                radius_end::Float64)
-            sum(mass[
-                Tools.between_bitmask(
-                    Tools.vector_norm_squared(coords),
-                    radius_start^2,
-                    radius_end^2
-                )
-            ])
-        end
-        function get_shell_mass(mass::Vector{Float64},
-                                radii_squared::Vector{Float64},
-                                radius_start::Float64,
-                                radius_end::Float64)
-            sum(mass[
-                Tools.between_bitmask(
-                    radii_squared,
-                    radius_start^2,
-                    radius_end^2
-                )
-            ])
-        end
         function check_done(a::Float64, b::Float64, tol::Float64)
-            if a != 0.0
-                (abs(a - b) / a) < tol
-            else
-                true
-            end
+            ifelse(a != 0.0, (abs(a - b) / a) < tol, true)
         end
 
         p = ProgressMeter.Progress(num_halos, desc = "Finding galaxy properties...")
@@ -301,7 +229,7 @@ mutable struct GalaxyData
             radii = zeros(Float64, number_of_bins)
             cumulative_mass = zeros(Float64, number_of_bins)
             done_flag = false
-            cumulative_mass[1] = get_cumulative_masses(
+            cumulative_mass[1] = Tools.get_cumulative_property(
                 masses_in_halo["stars"],
                 particle_radii2["stars"],
                 radius
@@ -312,8 +240,12 @@ mutable struct GalaxyData
             # Keep an index to access the current mass values at radius
             j = 2
             while !done_flag
-                shell_mass = get_shell_mass(masses_in_halo["stars"], particle_radii2["stars"],
-                                            radius, radius + delta_r)
+                shell_mass = Tools.get_shell_property(
+                    masses_in_halo["stars"], 
+                    particle_radii2["stars"],
+                    radius, 
+                    radius + delta_r
+                )
                 cumulative_mass[j] = cumulative_mass[j - 1] + shell_mass
 
                 # We just integrate all the way out to max_radius
