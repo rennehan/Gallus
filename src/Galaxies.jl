@@ -398,7 +398,13 @@ mutable struct GalaxyData
                         bulge_masses[i] = 2.0 * counter_rotating_mass
                     end
                     if key == "bhs"
-                        black_hole_masses[i] = maximum(bh_masses_in_halo[key][half_idx])
+                        core_idx = Tools.less_than_bitmask(
+                            particle_radii2[key],
+                            1.0
+                        )
+                        if true in core_idx
+                            black_hole_masses[i] = maximum(bh_masses_in_halo[key][core_idx])
+                        end
                     end
                 end
 
