@@ -7,6 +7,7 @@ include("io/WriterMaster.jl")
 include("Simulation.jl")
 include("Halos.jl")
 include("Galaxies.jl")
+include("Observations.jl")
 include("Visualization.jl")
 
 end

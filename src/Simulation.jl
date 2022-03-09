@@ -1,27 +1,50 @@
 module Simulation
 import Base.show, Base.print
-using DataFrames, Unitful, UnitfulAstro
+using DataFrames, Unitful, UnitfulAstro, NearestNeighbors
 using ..Tools, ..FileTypes, ..Reader
 
 mutable struct SimulationData{T <: FileTypes.File}
     obj::SimulationData
     simulation_files::T
-    cell_data::Dict
+    cell_data::Dict{String, DataFrame}
+    tree_data::Dict  
     loaded_fields::Dict
+    loaded_trees::Dict
     function SimulationData(simulation_files::T) where T
         sim_data = new{T}()
         sim_data.simulation_files = simulation_files
         sim_data.cell_data = Dict()
+        sim_data.tree_data = Dict()
         keys = ["gas", "stars", "dark", "bhs"]
         for key in keys
             sim_data.cell_data[key] = DataFrame()
+            # KDTree doesn't have an empty constructor :(
+            # sim_data.tree_data[key] = KDTree()
         end
 
         sim_data.loaded_fields = Dict{String, Bool}([])
+        sim_data.loaded_trees = Dict{String, Bool}([])
         sim_data
     end
 end
 show(io::IO, s::SimulationData) = show(io, "Created SimulationData structure!")
+
+function tree_present(sim_data::SimulationData, cell_type::String)
+    ifelse(cell_type in keys(sim_data.loaded_trees), true, false)
+end
+
+function get_tree(sim_data::SimulationData, cell_type::String)
+    if tree_present(sim_data, cell_type)
+        sim_data.tree_data[cell_type]
+    else
+        sim_data.loaded_trees[cell_type] = true
+        # @TODO Test leafsize variations
+        sim_data.tree_data[cell_type] = NearestNeighbors.KDTree(
+            ustrip.(u"kpc", get_field(sim_data, cell_type, "coordinates")),
+            leafsize = 10
+        )
+    end
+end
 
 function field_present(sim_data::SimulationData, cell_type::String, field_name::String)
     ifelse("$cell_type-$field_name" in keys(sim_data.loaded_fields), true, false)
@@ -78,8 +101,6 @@ function get_field(sim_data::SimulationData, cell_type::String, field_name::Stri
                 u"km/s"
             )
         else
-            println(cell_type)
-            println(field_name)
             sim_data.cell_data[cell_type][!, field_name] = data_from_file
             sim_data.cell_data[cell_type][!, field_name]
         end
