@@ -1,8 +1,27 @@
 module Galaxies
 import Base.show, Base.print
-using DataFrames, Unitful, UnitfulAstro, ..FileTypes, ..Halos, ..Tools
-using Plots, ProgressMeter, Statistics, LinearAlgebra
-using ..Simulation
+using DataFrames, Unitful, UnitfulAstro, ProgressMeter, Statistics, LinearAlgebra
+using ..Simulation, ..FileTypes, ..Reader, ..Writer, ..Halos, ..Tools
+
+global units_dict = Dict{String, Unitful.FreeUnits}([
+    "x" => u"kpc",
+    "y" => u"kpc",
+    "z" => u"kpc",
+    "vx" => u"km/s",
+    "vy" => u"km/s",
+    "vz" => u"km/s",
+    "half_mass_radius" => u"kpc",
+    "radius" => u"kpc",
+    "bulge_mass" => u"Msun",
+    "black_hole_mass" => u"Msun",
+    "mass" => u"Msun",
+    "radius" => u"kpc",
+    "velocity_dispersion" => u"km/s",
+    "jx" => u"kpc * km/s",
+    "jy" => u"kpc * km/s",
+    "jz" => u"kpc * km/s",
+    "sfr" => u"Msun/yr"
+])
 
 mutable struct GalaxyData
     obj::GalaxyData
@@ -30,7 +49,14 @@ mutable struct GalaxyData
     ...
     """
     function GalaxyData(file_container::FileTypes.Gallus)
-
+        if isfile(file_container.file_name)
+            galaxy_data = new()
+            dict_to_galaxy_data(Reader.read_file(file_container), galaxy_data)
+            galaxy_data
+        else
+            println("File does not exist!")
+            nothing
+        end
     end
 
     """
@@ -44,8 +70,15 @@ mutable struct GalaxyData
     - `sim_data::Simulation.SimulationData`: The master Simulation structure.
     ...
     """
-    function GalaxyData(halo_data::Halos.HaloData, sim_data::Simulation.SimulationData)
+    function GalaxyData(halo_data::Halos.HaloData, sim_data::Simulation.SimulationData,
+                        file_container::FileTypes.Gallus)
         galaxy_data = new()
+        if isfile(file_container.file_name)
+            println("Reading galaxy data from file.")
+            dict_to_galaxy_data(Reader.read_file(file_container), galaxy_data)
+            return galaxy_data
+        end
+        
         galaxy_data.galaxies = DataFrame()
 
         num_halos = nrow(halo_data.halos)
@@ -156,6 +189,7 @@ mutable struct GalaxyData
         p = ProgressMeter.Progress(num_halos, desc = "Finding galaxy properties...")
         # By this point we should have all of the particles in each halo.
         @views @inbounds Threads.@threads for i in 1:num_halos
+            halo_idx = string(i)
             # Some halos might not have particles of a certain type.
             # In that case, we only do the try..catch statement
             # once and store a boolean for whether we should ignore it
@@ -163,7 +197,7 @@ mutable struct GalaxyData
             halo_particle_keys = copy(keys)
             to_delete = []
             for key in halo_particle_keys
-                if length(getfield(halo_data, Symbol("$key" * "_list"))[i]) < 1
+                if length(getfield(halo_data, Symbol("$key" * "_list"))[halo_idx]) < 1
                     # If there are not enough particles, just remove it from the list
                     push!(to_delete, key)
                 end
@@ -194,22 +228,22 @@ mutable struct GalaxyData
             bh_masses_in_halo = Dict{String, Vector{Float64}}([])
             for key in halo_particle_keys
                 # E.g., slice_idx = halo_data.gas_list[i]
-                slice_idx = getfield(halo_data, Symbol("$key" * "_list"))[i]
-                offset_coords[key] = all_coords[key][:, slice_idx] .- halo_position
-                masses_in_halo[key] = all_masses[key][slice_idx]
-                vels_in_halo[key] = all_velocities[key][:, slice_idx]
+                slice_idx = getfield(halo_data, Symbol("$key" * "_list"))[halo_idx]
+                offset_coords[key] = @views all_coords[key][:, slice_idx] .- halo_position
+                masses_in_halo[key] = @views all_masses[key][slice_idx]
+                vels_in_halo[key] =  @views all_velocities[key][:, slice_idx]
                 particle_radii2[key] = Tools.vector_norm_squared(offset_coords[key])
                 vel_norms[key] = sqrt.(Tools.vector_norm_squared(vels_in_halo[key]))
 
                 if key == "gas" || key == "stars"
-                    z_in_halo[key] = all_metallicities[key][slice_idx]
+                    z_in_halo[key] = @views all_metallicities[key][slice_idx]
 
                     if key == "gas"
-                        sfrs_in_halo[key] = all_sfrs[key][slice_idx]
+                        sfrs_in_halo[key] = @views all_sfrs[key][slice_idx]
                     end
                 end
                 if key == "bhs"
-                    bh_masses_in_halo[key] = all_bh_masses[key][slice_idx]
+                    bh_masses_in_halo[key] = @views all_bh_masses[key][slice_idx]
                 end
             end          
 
@@ -487,8 +521,8 @@ mutable struct GalaxyData
             total_df[!, "jz"] = angular_momenta_total[key][3, :] .* u"kpc * km/s"
 
             if key == "gas"
-                half_df[!, "sfr"] = sfr_half[key]
-                total_df[!, "sfr"] = sfr_total[key]
+                half_df[!, "sfr"] = sfr_half[key] .* u"Msun/yr"
+                total_df[!, "sfr"] = sfr_total[key] .* u"Msun/yr"
 
                 half_df[!, "metallicity_sfr"] = z_half["z_sfr"]
                 half_df[!, "metallicity_mass"] = z_half["z_mass"]
@@ -516,9 +550,112 @@ mutable struct GalaxyData
             ]
         )
 
+        Writer.save_file(
+            file_container, 
+            galaxy_data_to_dict(galaxy_data)
+        )
         galaxy_data
     end
 end
 show(io::IO, g::GalaxyData) = show(io, "Created GalaxyData structure!")
+
+function dict_to_galaxy_data(data::Dict, galaxy_data::Galaxies.GalaxyData)
+    global units_dict
+    # HDF5 package does not support saving BitVector?
+    #galaxy_data.galaxy_bitmask = data["galaxy_bitmask"]
+    galaxy_data.total_galaxies = data["total_galaxies"]
+    galaxy_data.galaxies = DataFrame()
+    for column_name in keys(data["galaxies"])
+        if column_name in keys(units_dict)
+            galaxy_data.galaxies[!, column_name] = data["galaxies"][column_name] .* units_dict[column_name]
+        else
+            galaxy_data.galaxies[!, column_name] = data["galaxies"][column_name]
+        end
+    end
+
+    particle_keys = ["gas", "stars", "dark", "bhs"]
+    for key in particle_keys
+        half_df = DataFrame()
+        total_df = DataFrame()
+        half_key = "$key" * "_half"
+        total_key = "$key" * "_total"
+
+        for column_name in keys(data[half_key])
+            if column_name in keys(units_dict)
+                half_df[!, column_name] = data[half_key][column_name] .* units_dict[column_name]
+            else
+                half_df[!, column_name] = data[half_key][column_name]
+            end
+        end
+        for column_name in keys(data[total_key])
+            if column_name in keys(units_dict)
+                total_df[!, column_name] = data[total_key][column_name] .* units_dict[column_name]
+            else
+                total_df[!, column_name] = data[total_key][column_name]
+            end
+        end
+
+        setfield!(galaxy_data, Symbol(half_key), half_df)
+        setfield!(galaxy_data, Symbol(total_key), total_df)
+    end
+
+    # Recompute since HDF5 does not support saving BitVector.
+    # TODO: Convert BitVector and reconvert?
+    galaxy_data.galaxy_bitmask = Tools.greater_than_bitmask(
+        galaxy_data.stars_total[!, "mass"],
+        0.0 * u"Msun"
+    )
+end
+
+function galaxy_data_to_dict(galaxy_data::Galaxies.GalaxyData)
+    global units_dict
+    dict_to_save = Dict([])
+    # HDF5 package does not support saving BitVector? 
+    #dict_to_save["galaxy_bitmask"] = galaxy_data.galaxy_bitmask
+    dict_to_save["total_galaxies"] = galaxy_data.total_galaxies
+    dict_to_save["galaxies"] = Dict([])
+    for column_name in names(galaxy_data.galaxies)
+        if column_name in keys(units_dict)
+            dict_to_save["galaxies"][column_name] = ustrip.(
+                units_dict[column_name],
+                galaxy_data.galaxies[!, column_name]
+            )
+        else
+            dict_to_save["galaxies"][column_name] = galaxy_data.galaxies[!, column_name]
+        end
+    end
+    particle_keys = ["gas", "stars", "dark", "bhs"]
+    for key in particle_keys
+        half_key = "$key" * "_half"
+        dict_to_save[half_key] = Dict([])
+        data_copy = getfield(galaxy_data, Symbol(half_key))
+        for column_name in names(data_copy)
+            if column_name in keys(units_dict)
+                dict_to_save[half_key][column_name] = ustrip.(
+                    units_dict[column_name],
+                    data_copy[!, column_name]
+                )
+            else
+                dict_to_save[half_key][column_name] = data_copy[!, column_name]
+            end
+        end
+
+        total_key = "$key" * "_total"
+        dict_to_save[total_key] = Dict([])
+        data_copy = getfield(galaxy_data, Symbol(total_key))
+        for column_name in names(data_copy)
+            if column_name in keys(units_dict)
+                dict_to_save[total_key][column_name] = ustrip.(
+                    units_dict[column_name],
+                    data_copy[!, column_name]
+                )
+            else
+                dict_to_save[total_key][column_name] = data_copy[!, column_name]
+            end
+        end
+    end
+
+    dict_to_save
+end
 
 end

@@ -7,10 +7,10 @@ mutable struct HaloData{T <: FileTypes.File}
     obj::HaloData
     halo_files::T
     halos::DataFrames.DataFrame
-    gas_list::Dict{UInt32, Vector{Int64}}
-    stars_list::Dict{UInt32, Vector{Int64}}
-    dark_list::Dict{UInt32, Vector{Int64}}
-    bhs_list::Dict{UInt32, Vector{Int64}}
+    gas_list::Dict{Any, Any}
+    stars_list::Dict{Any, Any}
+    dark_list::Dict{Any, Any}
+    bhs_list::Dict{Any, Any}
     galaxies::Ref
     subhalos::Ref
     function HaloData(halo_files::T) where T
@@ -24,10 +24,11 @@ mutable struct HaloData{T <: FileTypes.File}
         halo_data.bhs_list = Dict([]) 
         num_halos = nrow(halo_data.halos)
         for i in 1:num_halos
-            halo_data.gas_list[i] = Vector{Int64}(undef, 0)
-            halo_data.stars_list[i] = Vector{Int64}(undef, 0)
-            halo_data.dark_list[i] = Vector{Int64}(undef, 0)
-            halo_data.bhs_list[i] = Vector{Int64}(undef, 0)
+            halo_idx = string(i)
+            halo_data.gas_list[halo_idx] = Vector{Int64}(undef, 0)
+            halo_data.stars_list[halo_idx] = Vector{Int64}(undef, 0)
+            halo_data.dark_list[halo_idx] = Vector{Int64}(undef, 0)
+            halo_data.bhs_list[halo_idx] = Vector{Int64}(undef, 0)
         end
 
         mass_keys = ["mvir", "m200", "m500", "m2500"]
@@ -58,7 +59,7 @@ show(io::IO, h::HaloData) = show(io, "Created HaloData structure!")
 
 function save_particles_in_halo(halo_data::HaloData, file_container::FileTypes.Gallus)
     keys = ["gas", "stars", "dark", "bhs"]
-    data = Dict{String, Dict{UInt32, Vector{Int64}}}([])
+    data = Dict{String, Dict{Any, Any}}([])
     for key in keys
         data[key] = getfield(halo_data, Symbol("$key" * "_list"))
     end
@@ -85,9 +86,9 @@ function find_particles_in_halo(halo_data::HaloData, sim_data::Simulation.Simula
         data = Reader.read_file(file_container)
         keys = ["gas", "stars", "dark", "bhs"]
         for key in keys
-            setfield!(halo_data, Symbol("$key" * "_list"), data[key]) 
+            setfield!(halo_data, Symbol("$key" * "_list"), data[key])
         end
-
+        println("Reading halo data from file.")
         return
     end
 
@@ -99,6 +100,7 @@ function find_particles_in_halo(halo_data::HaloData, sim_data::Simulation.Simula
         num_halos = nrow(halo_data.halos)
         p = ProgressMeter.Progress(num_halos, 0.5, "Finding $key particles in halos...")
         @views @inbounds Threads.@threads for i in 1:num_halos
+            halo_idx = string(i)
             halo_position = Array{Float64}(undef, 3)
             halo_position[1] = ustrip(Float64, u"kpc", halo_data.halos[i, "x"])
             halo_position[2] = ustrip(Float64, u"kpc", halo_data.halos[i, "y"])
@@ -110,13 +112,13 @@ function find_particles_in_halo(halo_data::HaloData, sim_data::Simulation.Simula
 
             # TODO: Can probably get rid of this ifelse tree if I am smart
             if key == "gas"
-                halo_data.gas_list[i] = idxs
+                halo_data.gas_list[halo_idx] = idxs
             elseif key == "stars"
-                halo_data.stars_list[i] = idxs
+                halo_data.stars_list[halo_idx] = idxs
             elseif key == "dark"
-                halo_data.dark_list[i] = idxs
+                halo_data.dark_list[halo_idx] = idxs
             else
-                halo_data.bhs_list[i] = idxs
+                halo_data.bhs_list[halo_idx] = idxs
             end
 
             ProgressMeter.next!(p)
